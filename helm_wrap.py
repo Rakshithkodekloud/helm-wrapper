@@ -2,144 +2,85 @@
 
 import sys
 import os
-import argparse
-import re 
-from urllib.parse import urlparse
 from subprocess import run
 from hwrap_settings import REAL_HELM, BITNAMI_HOST, HARBOR_HOST
 
-
-
 def get_handles():
+    """Retrieve Helm repository handles"""
     cmd = f"{REAL_HELM} repo list"
     data = run(cmd, capture_output=True, shell=True, text=True)
     if data.returncode != 0:
         return []
-    lines = data.stdout.splitlines()
-    first = True
-    is_bitnamy = []
-    for line in lines:
-        if first:
-            first = False
-        else:
-            keyword, repo = line.split()
-            if repo == BITNAMI_HOST:
-                is_bitnamy.append(keyword)
-    return is_bitnamy
+    lines = data.stdout.splitlines()[1:]  # Skip header
+    return [line.split()[0] for line in lines if line.split()[1] == BITNAMI_HOST]
 
 def parse_repo_spec(repo_spec):
-    parts = urlparse(repo_spec)
-    scheme = parts.scheme
-    host = parts.netloc
-    path_re =  r"/?([^/]+)/?(.+)?"
-    match = re.match(path_re, parts.path)
-    handle = match[1]
-    repo = ""
-    if match.lastindex > 1:
-        repo = match[2]
-
-    # print("For spec " + repo_spec)
-    # print(f"scheme = {scheme} host = {host} handle = {handle} repo = {repo}")
-    # print()
-
-    return scheme, host, handle, repo
+    """Parses repository spec (e.g., 'google-test/tomcat') and extracts repository handle and chart name."""
+    parts = repo_spec.split("/")
+    return (parts[0], parts[1]) if len(parts) >= 2 else ("", "")
 
 def uses_help(arg_list):
-    help_tokens = ["-h", "--help", "help"]
-    for token in help_tokens:
-        if token in arg_list:
-            return True
-    return False
+    """Check if help is requested"""
+    return any(token in arg_list for token in ["-h", "--help", "help"])
 
-
-def build_help_cmd(arg_list: list):
+def build_help_cmd(arg_list):
+    """Ensure Helm help commands are properly handled"""
     arg_list[0] = REAL_HELM
-    help_tokens = ["-h", "--help", "help"]
-    for token in help_tokens:
-        if token in arg_list:
-          arg_list.remove(token)
+    arg_list = [arg for arg in arg_list if arg not in ["-h", "--help", "help"]]
     arg_list.append("--help")
-    cmd = " ".join(arg_list)
-    return cmd
+    return " ".join(arg_list)
 
 def strip_flags(arg_list):
-    stripped = []
-    for item in arg_list:
-        if len(item) and item[0] == "-":
-            next
-        stripped.append(item)
-    return stripped
+    """Removes flags and their values from positional arguments but ensures they are not lost."""
+    stripped, flags = [], []
+    skip_next = False
+
+    for i, item in enumerate(arg_list):
+        if skip_next:
+            skip_next = False
+            continue
+
+        if item.startswith("-"):
+            flags.append(item)
+            if i + 1 < len(arg_list) and not arg_list[i + 1].startswith("-"):
+                flags.append(arg_list[i + 1])
+                skip_next = True
+        else:
+            stripped.append(item)
+
+    return stripped, flags
 
 def build_command(arg_list):
-    """
-    Parse out the images name and rebuild command to
-    access "real" helm binary
-
-    Relevant commands are:
-
-    helm repo add REPO_HANDLE REGISTRY_PATH
-
-    helm install INSTALL_NAME REPO_SPEC [-n NS]
+    """Construct the correct Helm command, transforming chart references when necessary."""
     
-    """
+    if len(arg_list) < 2:
+        return " ".join([REAL_HELM] + arg_list[1:])  # Pass through if too few arguments
 
     if uses_help(arg_list):
-        return build_help_cmd(arg_list)
-
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-n", "--namespace", help="K8s namespace",
-                        type=str, default="default")
-
-    positionals = strip_flags(arg_list)
-    parser.add_argument('command', type=str)
-    pos_count = len(positionals)
-    verb =  arg1 = arg2 = arg3 = ""
-
-    if pos_count > 1:
-        parser.add_argument('verb', type=str)
-        verb = positionals[1]
-    # if pos_count > 2:
-    #     parser.add_argument('arg1', type=str)
-    #     arg1 = positionals[2]
-    # if pos_count > 3:
-    #     parser.add_argument('arg2', type=str)
-    #     arg2 = positionals[3]
-    # if pos_count > 4:
-    #     parser.add_argument('arg3', type=str)
-    #     arg3 = positionals[4]
-    
-
-
-    args, items = parser.parse_known_args(arg_list)
-    
+        return build_help_cmd(arg_list)  # Handle help commands
 
     repos = get_handles()
+    cmd_parts = [REAL_HELM]
+    stripped_args, flags = strip_flags(arg_list)
 
-    if verb == "install" and len(items) > 1:
-        arg1, arg2 = items[0:2]
-        if arg2 == "":
-            raise Exception("repo spec is required")
-        scheme, host, handle, repo = parse_repo_spec(arg2)
+    if stripped_args[1] != "install":
+        return " ".join([REAL_HELM] + arg_list[1:])  # Pass non-install commands through unchanged
 
-        # print(scheme, host, handle, repo)
+    cmd_parts.append("install")
+    release_name = stripped_args[2] if len(stripped_args) > 2 else None
+    chart_name = stripped_args[3] if len(stripped_args) > 3 else None
+
+    if chart_name:
+        handle, repo = parse_repo_spec(chart_name)
         if handle in repos:
-            arg2 = f"oci://{HARBOR_HOST}/bitnami/{repo}"
-            # print("full repo: ", arg2)
+            chart_name = f"oci://{HARBOR_HOST}/bitnami/{repo}"
 
-        cmd = f"{REAL_HELM} install {arg1} {arg2}"
+    if release_name and chart_name:
+        cmd_parts.extend([release_name, chart_name])
+        cmd_parts.extend(flags)  # Append flags at the end
+        return " ".join(cmd_parts)
 
-
-    else:
-        arg_list[0] = REAL_HELM 
-        cmd = " ".join(arg_list)
-
-    
-
-
-    #print(f"varb {ns.verb} arg1 {ns.arg1} -n {ns.namespace}")
-    # print(rest)
-
-    return cmd
+    return " ".join(cmd_parts + ([release_name] if release_name else []))
 
 
 if __name__ == '__main__':
