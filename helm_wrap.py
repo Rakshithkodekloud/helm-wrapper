@@ -41,12 +41,18 @@ def strip_flags(arg_list):
             continue
 
         if item.startswith("-"):
-            flags.append(item)
-            if i + 1 < len(arg_list) and not arg_list[i + 1].startswith("-"):
-                flags.append(arg_list[i + 1])
-                skip_next = True
-        else:
-            stripped.append(item)
+            if "=" in item:  # Handle flags with `=` (e.g., --version=1.1.1.1)
+                key, value = item.split("=", 1)  # Split into flag and value
+                flags.append(key)
+                flags.append(value)
+            else:
+                flags.append(item)
+                if i + 1 < len(arg_list) and not arg_list[i + 1].startswith("-"):
+                    flags.append(arg_list[i + 1])
+                    skip_next = True
+            continue  # Don't add the flag itself
+
+        stripped.append(item)
 
     return stripped, flags
 
