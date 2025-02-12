@@ -69,25 +69,37 @@ def build_command(arg_list):
     cmd_parts = [REAL_HELM]
     stripped_args, flags = strip_flags(arg_list)
 
-    if stripped_args[1] != "install":
-        return " ".join([REAL_HELM] + arg_list[1:])  # Pass non-install commands through unchanged
+    command = stripped_args[1]
+    if command not in ["install", "pull"]:
+        return " ".join([REAL_HELM] + arg_list[1:])  # Pass non-install and non-pull commands through unchanged
 
-    cmd_parts.append("install")
-    release_name = stripped_args[2] if len(stripped_args) > 2 else None
-    chart_name = stripped_args[3] if len(stripped_args) > 3 else None
+    cmd_parts.append(command)
 
-    if chart_name:
-        handle, repo = parse_repo_spec(chart_name)
-        if handle in repos:
-            chart_name = f"oci://{HARBOR_HOST}/bitnami/{repo}"
+    if command == "install":
+        release_name = stripped_args[2] if len(stripped_args) > 2 else None
+        chart_name = stripped_args[3] if len(stripped_args) > 3 else None
 
-    if release_name and chart_name:
-        cmd_parts.extend([release_name, chart_name])
-        cmd_parts.extend(flags)  # Append flags at the end
-        return " ".join(cmd_parts)
+        if chart_name:
+            handle, repo = parse_repo_spec(chart_name)
+            if handle in repos:
+                chart_name = f"oci://{HARBOR_HOST}/bitnami/{repo}"
 
-    return " ".join(cmd_parts + ([release_name] if release_name else []))
+        if release_name and chart_name:
+            cmd_parts.extend([release_name, chart_name])
+        elif chart_name:
+            cmd_parts.append(chart_name)
 
+    elif command == "pull":
+        chart_name = stripped_args[2] if len(stripped_args) > 2 else None
+
+        if chart_name:
+            handle, repo = parse_repo_spec(chart_name)
+            if handle in repos:
+                chart_name = f"oci://{HARBOR_HOST}/bitnami/{repo}"
+            cmd_parts.append(chart_name)
+
+    cmd_parts.extend(flags)  # Append flags at the end
+    return " ".join(cmd_parts)
 
 if __name__ == '__main__':
     # Execute when the module is not initialized from an import statement.
